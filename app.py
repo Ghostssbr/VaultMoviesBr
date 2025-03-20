@@ -1,9 +1,9 @@
+from flask import Flask, jsonify, request, render_template_string
+from functools import wraps
 import sqlite3
 from datetime import datetime, timedelta
 import secrets
 import sys
-from flask import Flask, jsonify, request, render_template_string
-from functools import wraps
 
 # Adiciona o diretório atual ao sys.path (caso necessário)
 sys.path.append(".")
@@ -11,22 +11,6 @@ sys.path.append(".")
 # Caminhos dos bancos de dados
 DATABASE_API = "filmes.db"
 DATABASE_MANGAS = "mangas.db"
-
-# Função para resetar a tabela de chaves API
-def resetar_tabela_api_keys():
-    conn = sqlite3.connect(DATABASE_API)
-    cursor = conn.cursor()
-    cursor.execute("DROP TABLE IF EXISTS api_keys")  # Remove a tabela se existir
-    cursor.execute('''
-        CREATE TABLE api_keys (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            key TEXT NOT NULL UNIQUE,
-            ip TEXT NOT NULL,
-            expires_at TIMESTAMP NOT NULL
-        )
-    ''')  # Cria a tabela novamente
-    conn.commit()
-    conn.close()
 
 # Função para conectar ao banco de dados de chaves API
 def get_db_connection_api():
@@ -40,7 +24,7 @@ def get_db_connection_mangas():
     conn.row_factory = sqlite3.Row
     return conn
 
-# Função para gerar uma nova chave API (verifica se já existe uma ativa para o IP)
+# Função para gerar uma nova chave API ou retornar a existente (verifica se já existe uma chave ativa para o IP)
 def gerar_chave(ip):
     conn = get_db_connection_api()
     cursor = conn.cursor()
@@ -51,8 +35,9 @@ def gerar_chave(ip):
 
     if chave_existente:
         conn.close()
-        return None  # Retorna None se já existir uma chave válida
-
+        # Retorna a chave existente se estiver ativa
+        return chave_existente['key']
+    
     # Gerar nova chave e definir expiração para 24 horas
     chave = secrets.token_hex(16)
     expires_at = datetime.now() + timedelta(hours=24)
@@ -86,18 +71,18 @@ def requer_chave(f):
         return f(*args, **kwargs)
     return decorator
 
-# Rota para gerar uma nova chave API
-@app.route("/api/gerar_chave", methods=["GET"])
+# Rota para gerar uma nova chave API ou mostrar a chave existente
+@app.route("/chaves", methods=["GET"])
 def criar_chave():
     ip = request.remote_addr
-    nova_chave = gerar_chave(ip)
-    if nova_chave:
-        return jsonify({"chave": nova_chave, "expira_em": "24 horas"})
+    chave = gerar_chave(ip)
+    if chave:
+        return jsonify({"chave": chave, "expira_em": "24 horas"})
     else:
-        return jsonify({"error": "Já existe uma chave ativa para este IP."}), 400
+        return jsonify({"error": "Erro ao gerar chave."}), 400
 
 # Rota para listar todas as chaves de um IP
-@app.route("/api/chaves", methods=["GET"])
+@app.route("/chaves", methods=["GET"])
 def listar_chaves():
     ip = request.remote_addr
     conn = get_db_connection_api()
@@ -174,435 +159,213 @@ def listar_mangas(key):
 @app.route("/", methods=["GET"])
 def documentacao():
     return render_template_string('''
-        <!DOCTYPE html>
-        <html lang="pt-br">
-        <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>VaultMovies API</title>
-            <style>
-                * {
-                    margin: 0;
-                    padding: 0;
-                    box-sizing: border-box;
-                    font-family: 'Poppins', sans-serif;
-                }
+    <!DOCTYPE html>
+    <html lang="pt-br">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>VaultMovies API</title>
+        <style>
+            /* Estilos gerais */
+            body {
+                font-family: 'Arial', sans-serif;
+                margin: 0;
+                padding: 0;
+                background-color: #1e1e1e;
+                color: #fff;
+            }
 
-                body {
-                    background-color: #121212;
-                    color: #fff;
-                    line-height: 1.6;
-                    padding: 20px;
-                }
+            header {
+                background-color: #333;
+                color: #fff;
+                padding: 20px 0;
+                text-align: center;
+            }
 
-                header {
-                    background-color: #1a1a1a;
-                    padding: 20px;
-                    border-radius: 10px;
-                    margin-bottom: 20px;
-                }
+            header h1 {
+                margin: 0;
+                font-size: 2.5em;
+                font-weight: bold;
+            }
 
-                header .logo h1 {
-                    font-size: 2rem;
-                    color: #ff2d55;
-                    margin-bottom: 5px;
-                }
+            header p {
+                margin: 5px 0 0;
+                font-size: 1.2em;
+                color: #ccc;
+            }
 
-                header .logo .tagline {
-                    font-size: 1rem;
-                    color: #aaa;
-                }
+            nav ul {
+                list-style: none;
+                padding: 0;
+                margin: 20px 0;
+            }
 
-                nav ul {
-                    list-style: none;
-                    display: flex;
-                    gap: 20px;
-                }
+            nav ul li {
+                display: inline;
+                margin-right: 20px;
+            }
 
-                nav ul li a {
-                    color: #fff;
-                    text-decoration: none;
-                    font-size: 1.1rem;
-                    transition: color 0.3s;
-                }
+            nav ul li a {
+                color: #fff;
+                text-decoration: none;
+                font-weight: bold;
+            }
 
-                nav ul li a:hover {
-                    color: #ff2d55;
-                }
+            .intro {
+                text-align: center;
+                margin: 50px 0;
+                padding: 20px;
+                background-color: #2c2c2c;
+                border-radius: 10px;
+                box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+            }
 
-                .intro {
-                    background-color: #1d1d1d;
-                    padding: 40px;
-                    border-radius: 10px;
-                    text-align: center;
-                    margin-bottom: 20px;
-                }
+            .intro h2 {
+                font-size: 2em;
+                margin-bottom: 10px;
+            }
 
-                .intro h2 {
-                    font-size: 2.5rem;
-                    color: #ff2d55;
-                    margin-bottom: 20px;
-                }
+            .intro p {
+                font-size: 1.1em;
+                color: #ccc;
+            }
 
-                .intro p {
-                    font-size: 1.1rem;
-                    color: #ccc;
-                    margin-bottom: 20px;
-                }
+            .intro .btn {
+                display: inline-block;
+                margin-top: 20px;
+                padding: 10px 20px;
+                background-color: #f44336;
+                color: #fff;
+                text-decoration: none;
+                border-radius: 5px;
+                font-weight: bold;
+            }
 
-                .intro .btn {
-                    padding: 10px 20px;
-                    background-color: #ff2d55;
-                    color: #fff;
-                    text-decoration: none;
-                    font-weight: bold;
-                    border-radius: 5px;
-                    transition: background-color 0.3s;
-                }
+            .documentacao {
+                padding: 20px;
+                background-color: #2c2c2c;
+                margin: 20px;
+                border-radius: 10px;
+                box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+            }
 
-                .intro .btn:hover {
-                    background-color: #e02447;
-                }
+            .endpoint {
+                margin-bottom: 30px;
+                padding: 20px;
+                background-color: #424242;
+                border-radius: 10px;
+            }
 
-                .documentacao {
-                    background-color: #1d1d1d;
-                    padding: 20px;
-                    border-radius: 10px;
-                }
+            .endpoint-title {
+                font-size: 1.8em;
+                color: #f44336;
+                margin-bottom: 10px;
+            }
 
-                .documentacao h2 {
-                    font-size: 2rem;
-                    color: #ff2d55;
-                    margin-bottom: 20px;
-                }
+            .endpoint-description {
+                font-size: 1.1em;
+                color: #ccc;
+            }
 
-                .endpoint {
-                    background-color: #333;
-                    padding: 20px;
-                    border-radius: 10px;
-                    margin-bottom: 20px;
-                }
+            .endpoint-details {
+                margin-top: 15px;
+                padding: 15px;
+                background-color: #333;
+                border-radius: 5px;
+                font-family: monospace;
+                font-size: 1.05em;
+            }
 
-                .endpoint-title {
-                    font-size: 1.5rem;
-                    color: #ff2d55;
-                    margin-bottom: 10px;
-                }
+            .endpoint-details code {
+                background-color: #1e1e1e;
+                padding: 5px;
+                border-radius: 3px;
+                color: #f44336;
+            }
 
-                .endpoint-description p {
-                    font-size: 1.1rem;
-                    color: #ccc;
-                    margin-bottom: 10px;
-                }
+            .note {
+                background-color: #ffeb3b;
+                padding: 10px;
+                border-radius: 5px;
+                margin-top: 20px;
+                color: #000;
+            }
 
-                .endpoint-details p {
-                    font-size: 1rem;
-                    color: #fff;
-                    margin-bottom: 5px;
-                }
+            footer {
+                text-align: center;
+                padding: 20px 0;
+                background-color: #333;
+                color: #fff;
+                margin-top: 50px;
+            }
 
-                .endpoint-details code {
-                    background-color: #444;
-                    color: #ff2d55;
-                    padding: 2px 4px;
-                    border-radius: 5px;
-                }
+            footer p {
+                margin: 0;
+                font-size: 0.9em;
+            }
+        </style>
+    </head>
+    <body>
+        <header>
+            <div class="logo">
+                <h1>VaultMovies API</h1>
+                <p>Sua fonte para filmes e gerenciamento de chaves API</p>
+            </div>
+            <nav>
+                <ul>
+                    <li><a href="#">Home</a></li>
+                    <li><a href="#documentacao">Documentação</a></li>
+                    <li><a href="#">Sobre</a></li>
+                </ul>
+            </nav>
+        </header>
 
-                .note {
-                    background-color: #222;
-                    padding: 15px;
-                    border-radius: 5px;
-                    margin-top: 20px;
-                }
+        <section class="intro">
+            <h2>Bem-vindo à VaultMovies API</h2>
+            <p>A API VaultMovies oferece acesso completo a filmes, gerenciamento de chaves API e muito mais. Explore os endpoints abaixo.</p>
+            <a href="#documentacao" class="btn">Veja a Documentação</a>
+        </section>
 
-                .note p {
-                    font-size: 1rem;
-                    color: #ccc;
-                }
-
-                footer {
-                    background-color: #1a1a1a;
-                    padding: 15px;
-                    text-align: center;
-                    border-radius: 10px;
-                    margin-top: 20px;
-                }
-
-                footer p {
-                    font-size: 0.9rem;
-                    color: #aaa;
-                }
-            </style>
-        </head>
-        <body>
-            <header>
-                <div class="logo">
-                    <h1>VaultMovies API</h1>
-                    <p class="tagline">Sua fonte para filmes e gerenciamento de chaves API</p>
-                </div>
-                <nav>
-                    <ul>
-                        <li><a href="#">Home</a></li>
-                        <li><a href="#documentacao">Documentação</a></li>
-                        <li><a href="#">Sobre</a></li>
-                    </ul>
-                </nav>
-            </header>
+        <section id="documentacao" class="documentacao">
+            <h2>Documentação da API</h2>
             
-            <section class="intro">
-                <h2>Bem-vindo à VaultMovies API</h2>
-                <p>A API VaultMovies oferece acesso completo a filmes, gerenciamento de chaves API e muito mais. Explore os endpoints abaixo.</p>
-                <a href="#documentacao" class="btn">Veja a Documentação</a>
-            </section>
-
-            <section id="documentacao" class="documentacao">
-                <h2>Documentação da API</h2>
-                
-                <div class="endpoint">
-                    <h3 class="endpoint-title">Gerenciar Chaves API</h3>
-                    <div class="endpoint-description">
-                        <p>Este endpoint permite que você gere, renove ou remova chaves API associadas ao seu IP.</p>
-                    </div>
-                    <div class="endpoint-details">
-                        <p><strong>URL:</strong> <code>/chaves</code></p>
-                        <p><strong>Método:</strong> <code>GET</code></p>
-                        <p><strong>Parâmetros:</strong> Nenhum</p>
-                        <p><strong>Resposta:</strong> Uma chave API gerada ou confirmação de remoção.</p>
-                    </div>
+            <div class="endpoint">
+                <h3 class="endpoint-title">Gerenciar Chaves API</h3>
+                <div class="endpoint-description">
+                    <p>Este endpoint permite que você gere, renove ou remova chaves API associadas ao seu IP.</p>
                 </div>
-
-                <div class="endpoint">
-                    <h3 class="endpoint-title">Listar Filmes</h3>
-                    <div class="endpoint-description">
-                        <p>Este endpoint retorna uma lista de todos os filmes registrados no banco de dados.</p>
-                    </div>
-                    <div class="endpoint-details">
-                        <p><strong>URL:</strong> <code>/api/&lt;key&gt;/filmes</code></p>
-                        <p><strong>Método:</strong> <code>GET</code></p>
-                        <p><strong>Parâmetros:</strong> <code>key</code> (Chave API)</p>
-                        <p><strong>Resposta:</strong> Uma lista de filmes com suas informações básicas.</p>
-                    </div>
+                <div class="endpoint-details">
+                    <p><strong>URL:</strong> <code>/chaves</code></p>
+                    <p><strong>Método:</strong> <code>GET</code></p>
+                    <p><strong>Parâmetros:</strong> Nenhum</p>
+                    <p><strong>Resposta:</strong> Uma chave API gerada ou confirmação de remoção.</p>
                 </div>
-
-                <div class="note">
-                    <p><strong>Nota:</strong> Para acessar os endpoints de filmes, você precisa de uma chave API válida, que pode ser gerada através do endpoint <code>/chaves</code>.</p>
-                </div>
-            </section>
-
-            <footer>
-                <p>&copy; 2025 VaultMovies. Todos os direitos reservados.</p>
-            </footer>
-        </body>
-        </html>
-    ''')
-
-# Rota para gerenciar chaves
-@app.route("/chaves", methods=["GET"])
-def gerenciar_chaves():
-    return render_template_string('''
-        <!DOCTYPE html>
-        <html lang="pt-BR">
-        <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>Gerenciar Chaves da API</title>
-            <style>
-                * {
-                    margin: 0;
-                    padding: 0;
-                    box-sizing: border-box;
-                    font-family: 'Poppins', sans-serif;
-                }
-
-                body {
-                    background-color: #121212;
-                    color: #fff;
-                    line-height: 1.6;
-                    padding: 20px;
-                }
-
-                .container {
-                    max-width: 900px;
-                    margin: 0 auto;
-                }
-
-                header {
-                    text-align: center;
-                    margin-bottom: 40px;
-                }
-
-                header h1 {
-                    font-size: 2.5rem;
-                    color: #e60000;
-                }
-
-                header .tagline {
-                    font-size: 1rem;
-                    color: #aaa;
-                }
-
-                .documentacao {
-                    background-color: #1c1c1c;
-                    padding: 20px;
-                    border-radius: 10px;
-                    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-                }
-
-                .documentacao h2 {
-                    font-size: 2rem;
-                    color: #e60000;
-                    margin-bottom: 20px;
-                }
-
-                .endpoint {
-                    background-color: #222;
-                    padding: 20px;
-                    margin-bottom: 30px;
-                    border-radius: 8px;
-                }
-
-                .endpoint h3 {
-                    font-size: 1.5rem;
-                    color: #fff;
-                    margin-bottom: 10px;
-                }
-
-                .endpoint p {
-                    font-size: 1rem;
-                    color: #ccc;
-                    margin-bottom: 10px;
-                }
-
-                button {
-                    padding: 10px 20px;
-                    background-color: #e60000;
-                    color: #fff;
-                    font-size: 1.1rem;
-                    border: none;
-                    border-radius: 5px;
-                    cursor: pointer;
-                    transition: background-color 0.3s ease;
-                }
-
-                button:hover {
-                    background-color: #b30000;
-                }
-
-                ul {
-                    list-style-type: none;
-                    margin-top: 10px;
-                }
-
-                ul li {
-                    font-size: 1rem;
-                    color: #ccc;
-                    margin-bottom: 5px;
-                }
-
-                .voltar-docs {
-                    display: block;
-                    text-align: center;
-                    margin-top: 30px;
-                    color: #e60000;
-                    text-decoration: none;
-                    font-size: 1rem;
-                }
-
-                .voltar-docs:hover {
-                    text-decoration: underline;
-                }
-
-                footer {
-                    background-color: #1c1c1c;
-                    padding: 20px;
-                    text-align: center;
-                    font-size: 1rem;
-                    border-top: 2px solid #e60000;
-                    margin-top: 40px;
-                }
-
-                @media (max-width: 768px) {
-                    .container {
-                        padding: 15px;
-                    }
-
-                    header h1 {
-                        font-size: 2rem;
-                    }
-
-                    .documentacao h2 {
-                        font-size: 1.5rem;
-                    }
-
-                    .endpoint h3 {
-                        font-size: 1.2rem;
-                    }
-
-                    button {
-                        font-size: 1rem;
-                    }
-
-                    ul li {
-                        font-size: 0.9rem;
-                    }
-                }
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <header>
-                    <h1>VaultMovies API - Gerenciar Chaves</h1>
-                    <p class="tagline">Gerencie suas chaves API para acessar a nossa base de filmes</p>
-                </header>
-                <section class="documentacao">
-                    <h2>Documentação de Chaves API</h2>
-                    <p>Para acessar os recursos da VaultMovies API, você precisará de uma chave API. Use os seguintes recursos:</p>
-
-                    <div class="endpoint">
-                        <h3>Gerar Nova Chave</h3>
-                        <p>Gere uma nova chave API associada ao seu IP. Se uma chave ativa já existir, você receberá uma mensagem informando isso.</p>
-                        <button onclick="gerarChave()">Gerar Chave</button>
-                        <p id="chaveGerada"></p>
-                    </div>
-
-                    <div class="endpoint">
-                        <h3>Chaves Existentes</h3>
-                        <p>Veja todas as chaves API associadas ao seu IP e suas datas de expiração.</p>
-                        <ul id="listaChaves"></ul>
-                    </div>
-                </section>
-
-                <a href="/" class="voltar-docs">Voltar para a documentação</a>
-
-                <footer>
-                    <p>© 2025 VaultMovies API. Todos os direitos reservados.</p>
-                </footer>
             </div>
 
-            <script>
-                function gerarChave() {
-                    fetch('/api/gerar_chave')
-                        .then(response => response.json())
-                        .then(data => {
-                            document.getElementById('chaveGerada').textContent = data.chave 
-                                ? `Chave gerada: ${data.chave}`
-                                : 'Já existe uma chave ativa para este IP.';
-                        });
-                }
+            <div class="endpoint">
+                <h3 class="endpoint-title">Listar Filmes</h3>
+                <div class="endpoint-description">
+                    <p>Este endpoint retorna uma lista de todos os filmes registrados no banco de dados.</p>
+                </div>
+                <div class="endpoint-details">
+                    <p><strong>URL:</strong> <code>/api/&lt;key&gt;/filmes</code></p>
+                    <p><strong>Método:</strong> <code>GET</code></p>
+                    <p><strong>Parâmetros:</strong> <code>key</code> (Chave API)</p>
+                    <p><strong>Resposta:</strong> Uma lista de filmes com suas informações básicas.</p>
+                </div>
+            </div>
 
-                fetch('/api/chaves')
-                    .then(response => response.json())
-                    .then(data => {
-                        const lista = document.getElementById('listaChaves');
-                        lista.innerHTML = data.map(chave => `<li>${chave.key} - Expira: ${chave.expires_at}</li>`).join('');
-                    });
-            </script>
-        </body>
-        </html>
+            <div class="note">
+                <p><strong>Nota:</strong> Para acessar os endpoints de filmes, você precisa de uma chave API válida, que pode ser gerada através do endpoint <code>/chaves</code>.</p>
+            </div>
+        </section>
+
+        <footer>
+            <p>&copy; 2025 VaultMovies. Todos os direitos reservados.</p>
+        </footer>
+    </body>
+    </html>
     ''')
-
-# Resetar a tabela de chaves no início (remova essa linha em produção)
-resetar_tabela_api_keys()
 
 # Iniciar o servidor
 if __name__ == "__main__":

@@ -4,6 +4,7 @@ import sqlite3
 from datetime import datetime, timedelta
 import secrets
 import sys
+import os
 
 # Adiciona o diretório atual ao sys.path (caso necessário)
 sys.path.append(".")
@@ -11,6 +12,13 @@ sys.path.append(".")
 # Caminhos dos bancos de dados
 DATABASE_API = "filmes.db"
 DATABASE_MANGAS = "mangas.db"
+
+# Verifica se os arquivos do banco de dados existem, caso contrário, cria-os
+if not os.path.exists(DATABASE_API):
+    open(DATABASE_API, "w").close()
+
+if not os.path.exists(DATABASE_MANGAS):
+    open(DATABASE_MANGAS, "w").close()
 
 # Função para conectar ao banco de dados de chaves API
 def get_db_connection_api():
@@ -24,38 +32,91 @@ def get_db_connection_mangas():
     conn.row_factory = sqlite3.Row
     return conn
 
-# Função para gerar uma nova chave API ou retornar a existente (verifica se já existe uma chave ativa para o IP)
-def gerar_chave(ip):
+# Função para inicializar o banco de dados de chaves API
+def init_db_api():
     conn = get_db_connection_api()
     cursor = conn.cursor()
-
-    # Verificar se o IP já possui uma chave ativa
-    cursor.execute("SELECT * FROM api_keys WHERE ip = ? AND expires_at > ?", (ip, datetime.now()))
-    chave_existente = cursor.fetchone()
-
-    if chave_existente:
-        conn.close()
-        # Retorna a chave existente se estiver ativa
-        return chave_existente['key']
-    
-    # Gerar nova chave e definir expiração para 24 horas
-    chave = secrets.token_hex(16)
-    expires_at = datetime.now() + timedelta(hours=24)
-
-    cursor.execute("INSERT INTO api_keys (key, ip, expires_at) VALUES (?, ?, ?)", (chave, ip, expires_at))
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS api_keys (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            key TEXT NOT NULL,
+            ip TEXT NOT NULL,
+            expires_at DATETIME NOT NULL
+        )
+    ''')
     conn.commit()
     conn.close()
 
-    return chave
+# Função para inicializar o banco de dados de mangás
+def init_db_mangas():
+    conn = get_db_connection_mangas()
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS mangas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT NOT NULL,
+            rating REAL,
+            year INTEGER,
+            cover TEXT,
+            link TEXT,
+            genres TEXT,
+            synopsis TEXT
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS chapters (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            manga_id INTEGER,
+            title TEXT NOT NULL,
+            link TEXT,
+            release_date DATETIME,
+            images TEXT,
+            FOREIGN KEY (manga_id) REFERENCES mangas (id)
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+# Função para gerar uma nova chave API ou retornar a existente (verifica se já existe uma chave ativa para o IP)
+def gerar_chave(ip):
+    try:
+        conn = get_db_connection_api()
+        cursor = conn.cursor()
+
+        # Verificar se o IP já possui uma chave ativa
+        cursor.execute("SELECT * FROM api_keys WHERE ip = ? AND expires_at > ?", (ip, datetime.now()))
+        chave_existente = cursor.fetchone()
+
+        if chave_existente:
+            conn.close()
+            # Retorna a chave existente se estiver ativa
+            return chave_existente['key']
+        
+        # Gerar nova chave e definir expiração para 24 horas
+        chave = secrets.token_hex(16)
+        expires_at = datetime.now() + timedelta(hours=24)
+
+        cursor.execute("INSERT INTO api_keys (key, ip, expires_at) VALUES (?, ?, ?)", (chave, ip, expires_at))
+        conn.commit()
+        conn.close()
+
+        return chave
+    except sqlite3.OperationalError as e:
+        print(f"Erro ao acessar o banco de dados: {e}")
+        return None
 
 # Função para verificar se uma chave API é válida
 def verificar_chave(chave, ip):
-    conn = get_db_connection_api()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM api_keys WHERE key = ? AND ip = ? AND expires_at > ?", (chave, ip, datetime.now()))
-    chave_valida = cursor.fetchone()
-    conn.close()
-    return chave_valida is not None
+    try:
+        conn = get_db_connection_api()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM api_keys WHERE key = ? AND ip = ? AND expires_at > ?", (chave, ip, datetime.now()))
+        chave_valida = cursor.fetchone()
+        conn.close()
+        return chave_valida is not None
+    except sqlite3.OperationalError as e:
+        print(f"Erro ao verificar chave: {e}")
+        return False
 
 # Iniciar a API Flask
 app = Flask(__name__)
@@ -79,18 +140,21 @@ def criar_chave():
     if chave:
         return jsonify({"chave": chave, "expira_em": "24 horas"})
     else:
-        return jsonify({"error": "Erro ao gerar chave."}), 400
+        return jsonify({"error": "Erro ao gerar chave."}), 500
 
 # Rota para listar todas as chaves de um IP
-@app.route("/chaves", methods=["GET"])
+@app.route("/chaves/listar", methods=["GET"])
 def listar_chaves():
     ip = request.remote_addr
-    conn = get_db_connection_api()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM api_keys WHERE ip = ?", (ip,))
-    chaves = cursor.fetchall()
-    conn.close()
-    return jsonify([dict(chave) for chave in chaves])
+    try:
+        conn = get_db_connection_api()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM api_keys WHERE ip = ?", (ip,))
+        chaves = cursor.fetchall()
+        conn.close()
+        return jsonify([dict(chave) for chave in chaves])
+    except sqlite3.OperationalError as e:
+        return jsonify({"error": f"Erro ao acessar o banco de dados: {e}"}), 500
 
 # Rota para listar filmes (requer chave API)
 @app.route("/api/<key>/filmes", methods=["GET"])
@@ -99,61 +163,67 @@ def listar_filmes(key):
     nome = request.args.get('q', '')
     id_filme = request.args.get('id', None)
 
-    conn = get_db_connection_api()
-    cursor = conn.cursor()
+    try:
+        conn = get_db_connection_api()
+        cursor = conn.cursor()
 
-    if id_filme:
-        cursor.execute("SELECT * FROM filmes WHERE id = ?", (id_filme,))
-        filmes = cursor.fetchall()
-    elif nome:
-        cursor.execute("SELECT * FROM filmes WHERE title LIKE ?", ('%' + nome + '%',))
-        filmes = cursor.fetchall()
-    else:
-        cursor.execute("SELECT * FROM filmes")
-        filmes = cursor.fetchall()
+        if id_filme:
+            cursor.execute("SELECT * FROM filmes WHERE id = ?", (id_filme,))
+            filmes = cursor.fetchall()
+        elif nome:
+            cursor.execute("SELECT * FROM filmes WHERE title LIKE ?", ('%' + nome + '%',))
+            filmes = cursor.fetchall()
+        else:
+            cursor.execute("SELECT * FROM filmes")
+            filmes = cursor.fetchall()
 
-    conn.close()
-    return jsonify([dict(filme) for filme in filmes])
+        conn.close()
+        return jsonify([dict(filme) for filme in filmes])
+    except sqlite3.OperationalError as e:
+        return jsonify({"error": f"Erro ao acessar o banco de dados: {e}"}), 500
 
 # Rota para listar mangás (requer chave API)
 @app.route("/api/<key>/mangas", methods=["GET"])
 @requer_chave
 def listar_mangas(key):
-    conn = get_db_connection_mangas()
-    cursor = conn.cursor()
+    try:
+        conn = get_db_connection_mangas()
+        cursor = conn.cursor()
 
-    cursor.execute("SELECT * FROM mangas")
-    mangas = cursor.fetchall()
+        cursor.execute("SELECT * FROM mangas")
+        mangas = cursor.fetchall()
 
-    dados_mangas = []
-    for manga in mangas:
-        cursor.execute("SELECT * FROM chapters WHERE manga_id = ?", (manga['id'],))
-        capitulos = cursor.fetchall()
+        dados_mangas = []
+        for manga in mangas:
+            cursor.execute("SELECT * FROM chapters WHERE manga_id = ?", (manga['id'],))
+            capitulos = cursor.fetchall()
 
-        dados_capitulos = [
-            {
-                "id": capitulo['id'],
-                "titulo": capitulo['title'],
-                "link": capitulo['link'],
-                "data_lancamento": capitulo['release_date'],
-                "imagens": capitulo['images'].split(", ")
-            } for capitulo in capitulos
-        ]
+            dados_capitulos = [
+                {
+                    "id": capitulo['id'],
+                    "titulo": capitulo['title'],
+                    "link": capitulo['link'],
+                    "data_lancamento": capitulo['release_date'],
+                    "imagens": capitulo['images'].split(", ")
+                } for capitulo in capitulos
+            ]
 
-        dados_mangas.append({
-            "id": manga['id'],
-            "titulo": manga['title'],
-            "rating": manga['rating'],
-            "ano": manga['year'],
-            "capa": manga['cover'],
-            "link": manga['link'],
-            "generos": manga['genres'].split(", "),
-            "sinopse": manga['synopsis'],
-            "capitulos": dados_capitulos
-        })
+            dados_mangas.append({
+                "id": manga['id'],
+                "titulo": manga['title'],
+                "rating": manga['rating'],
+                "ano": manga['year'],
+                "capa": manga['cover'],
+                "link": manga['link'],
+                "generos": manga['genres'].split(", "),
+                "sinopse": manga['synopsis'],
+                "capitulos": dados_capitulos
+            })
 
-    conn.close()
-    return jsonify(dados_mangas)
+        conn.close()
+        return jsonify(dados_mangas)
+    except sqlite3.OperationalError as e:
+        return jsonify({"error": f"Erro ao acessar o banco de dados: {e}"}), 500
 
 # Rota para a página de documentação
 @app.route("/", methods=["GET"])
@@ -366,6 +436,10 @@ def documentacao():
     </body>
     </html>
     ''')
+
+# Inicializa os bancos de dados
+init_db_api()
+init_db_mangas()
 
 # Iniciar o servidor
 if __name__ == "__main__":
